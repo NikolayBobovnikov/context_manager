@@ -26,7 +26,7 @@ This Rust version is a rewrite of an original Python project, aiming for improve
 ### 3.1. Directory Layout
 
 ```
-context_builder_rst/
+context_builder/
 ├── Cargo.toml              # Manages project dependencies and metadata
 ├── README.md               # This file
 ├── src/
@@ -194,7 +194,7 @@ This section highlights some of the Rust patterns, language features, and soluti
 2.  **Clone the Repository** (if applicable, otherwise skip if you have the project locally):
     ```bash
     # git clone <repository-url>
-    # cd context_builder_rst
+    # cd context_builder
     ```
 3.  **Build the Project**:
     *   For a development (debug) build:
@@ -216,9 +216,9 @@ This section highlights some of the Rust patterns, language features, and soluti
         ```
     *   Alternatively, run the executable directly after building (e.g., for release):
         ```bash
-        ./target/release/context_builder_rst
+        ./target/release/context_builder
         ```
-        (On Windows, this would be `.\target\release\context_builder_rst.exe`)
+        (On Windows, this would be `.\target\release\context_builder.exe`)
 
 5.  **Check for Errors (Development)**:
     To quickly check your code for errors without performing a full compilation:

@@ -9,10 +9,10 @@ pub enum AppEvent {
     DirectoryScanComplete(Result<FileNode, AppError>),
     /// File modified and debounced
     FileModifiedDebounced(PathBuf),
-    /// Markdown generation completed
-    MarkdownGenerationComplete(Result<(), AppError>),
-    /// Partial markdown update completed
-    PartialMarkdownUpdateComplete(Result<(), AppError>),
+    /// Document generation completed (renamed)
+    DocumentGenerationComplete(Result<(), AppError>),
+    /// Partial document update completed (renamed)
+    PartialDocumentUpdateComplete(Result<(), AppError>),
     /// File watcher encountered an error
     #[allow(dead_code)]
     WatcherError(AppError),
