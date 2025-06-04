@@ -23,8 +23,8 @@ pub enum AppError {
     #[allow(dead_code)]
     #[error("Channel send error: {0}")]
     ChannelSend(String), // For mpsc send errors, with context
-    #[error("Markdown generation error: {0}")]
-    MarkdownGeneration(String),
+    #[error("Document generation error: {0}")]
+    DocumentGenerationError(String),
     /// Generic operation failure
     #[allow(dead_code)]
     #[error("Operation failed: {0}")]

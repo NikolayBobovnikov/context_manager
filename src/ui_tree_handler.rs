@@ -129,14 +129,14 @@ impl UITreeHandler {
                 }
                 
                 // Add some visual indication for partially selected directories
-                let header_icon = match node.selected_state {
-                    SelectionState::Selected => "📁",
-                    SelectionState::PartiallySelected => "📂",
-                    SelectionState::Unselected => "📁",
-                };
+                // let header_icon = match node.selected_state {
+                //     SelectionState::Selected => "📁",
+                //     SelectionState::PartiallySelected => "📂",
+                //     SelectionState::Unselected => "📁",
+                // };
                 
                 // Collapsing header for directory with better styling
-                let header_response = CollapsingHeader::new(format!("{} {}", header_icon, node.display_name))
+                let header_response = CollapsingHeader::new(format!(" {}", node.display_name))
                     .id_source(node.id)
                     .default_open(node.expanded)
                     .show(ui, |ui| {

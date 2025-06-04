@@ -1,12 +1,16 @@
 [package]
-name = "context_builder_rst"
+name = "context_builder"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 # GUI Framework
-eframe = "0.27"
+eframe = { version = "0.27", features = ["default_fonts", "glow", "wgpu", "x11"] }
 egui = "0.27"
+
+# Emoji rendering
+egui-twemoji = "0.1.0"
+egui_extras = { version = "0.27", features = ["svg"] }
 
 # File System Operations
 notify = "6.1"

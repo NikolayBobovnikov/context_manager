@@ -3,14 +3,14 @@ mod error;
 mod events;
 mod file_handler;
 mod file_monitor;
-mod markdown_generator;
+mod document_generator;
 mod ui_tree_handler;
 mod app;
 
 use eframe::NativeOptions;
 use log::info;
 
-use app::MarkdownContextBuilderApp;
+use app::ContextBuilderApp;
 
 fn main() -> Result<(), eframe::Error> {
     // Initialize logging
@@ -30,6 +30,6 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Context Builder",
         options,
-        Box::new(|cc| Box::new(MarkdownContextBuilderApp::new(cc))),
+        Box::new(|cc| Box::new(ContextBuilderApp::new(cc))),
     )
 }

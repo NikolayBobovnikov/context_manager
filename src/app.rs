@@ -4,19 +4,24 @@ use std::thread;
 use std::time::Instant;
 use egui::Context;
 use log::{debug, info, warn, error};
+use egui_twemoji::EmojiLabel;
+use egui::RichText;
+use egui_extras;
 
-use crate::constants::{OUTPUT_FILENAME, UI_STATUS_MESSAGE_DURATION};
+use crate::constants::{UI_STATUS_MESSAGE_DURATION, OutputFormat, DEFAULT_OUTPUT_FORMAT, DEFAULT_OUTPUT_FILENAME_BASE};
 use crate::error::Result;
 use crate::events::AppEvent;
 use crate::file_handler::{FileHandler, FileNode};
 use crate::file_monitor::FileMonitor;
-use crate::markdown_generator::MarkdownGenerator;
+use crate::document_generator::DocumentGenerator;
 use crate::ui_tree_handler::UITreeHandler;
 
-pub struct MarkdownContextBuilderApp {
+pub struct ContextBuilderApp {
     // Core state
     current_directory: Option<PathBuf>,
     root_file_node: Option<FileNode>,
+    selected_output_format: OutputFormat,
+    output_file_path: Option<PathBuf>,
     
     // UI state
     ui_tree_handler: UITreeHandler,
@@ -35,17 +40,22 @@ pub struct MarkdownContextBuilderApp {
     
     // Operation states
     is_loading_directory: bool,
-    is_generating_markdown: bool,
+    is_generating_document: bool,
 }
 
-impl MarkdownContextBuilderApp {
+impl ContextBuilderApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let (event_sender, event_receiver) = mpsc::channel();
         let file_monitor = FileMonitor::new(event_sender.clone());
         
+        // Install image loaders for egui-twemoji (required for rendering SVG and PNG emotes)
+        egui_extras::install_image_loaders(&_cc.egui_ctx);
+        
         Self {
             current_directory: None,
             root_file_node: None,
+            selected_output_format: DEFAULT_OUTPUT_FORMAT,
+            output_file_path: None,
             ui_tree_handler: UITreeHandler::new(),
             event_sender,
             event_receiver,
@@ -54,7 +64,7 @@ impl MarkdownContextBuilderApp {
             status_message: None,
             error_message: None,
             is_loading_directory: false,
-            is_generating_markdown: false,
+            is_generating_document: false,
         }
     }
 
@@ -93,6 +103,7 @@ impl MarkdownContextBuilderApp {
         // Clear current state
         self.current_directory = Some(directory.clone());
         self.root_file_node = None;
+        self.output_file_path = None;
         self.ui_tree_handler = UITreeHandler::new();
         
         // Start directory scan in background thread
@@ -116,11 +127,17 @@ impl MarkdownContextBuilderApp {
                 self.root_file_node = Some(root_node.clone());
                 self.ui_tree_handler.build_from_file_node(&root_node);
                 self.set_status_message("Directory loaded successfully".to_string());
+                
+                // Suggest default output path based on directory and default format
+                if let Some(dir) = &self.current_directory {
+                    self.output_file_path = Some(dir.join(format!("{}.{}", DEFAULT_OUTPUT_FILENAME_BASE, DEFAULT_OUTPUT_FORMAT.extension())));
+                }
             }
             Err(e) => {
                 error!("Directory scan failed: {}", e);
                 self.set_error_message(format!("Failed to scan directory: {}", e));
                 self.current_directory = None;
+                self.output_file_path = None; // Clear path on scan failure
             }
         }
     }
@@ -133,10 +150,16 @@ impl MarkdownContextBuilderApp {
             return;
         }
 
+        // Ensure output path is set before starting monitoring
+        if self.output_file_path.is_none() {
+             self.set_error_message("Please choose an output file path before starting monitoring".to_string());
+             return;
+        }
+
         if self.current_directory.is_some() {
-            // First generate the initial markdown
-            self.generate_markdown(false);
-            
+            // First generate the initial document (pass false to suppress completion message here)
+            self.generate_document(false);
+
             // Then start file monitoring
             match self.file_monitor.start_monitoring(selected_files.clone()) {
                 Ok(()) => {
@@ -164,13 +187,13 @@ impl MarkdownContextBuilderApp {
         }
     }
 
-    fn generate_markdown(&mut self, show_completion_message: bool) {
-        if let (Some(directory), Some(root_node)) = (&self.current_directory, &self.root_file_node) {
+    fn generate_document(&mut self, show_completion_message: bool) {
+        if let (Some(directory), Some(root_node), Some(output_path)) = (&self.current_directory, &self.root_file_node, &self.output_file_path) {
             let selected_files = self.ui_tree_handler.get_selected_files();
-            
+
             if selected_files.is_empty() {
                 if show_completion_message {
-                    self.set_error_message("Please select at least one file to generate markdown".to_string());
+                    self.set_error_message("Please select at least one file to generate document".to_string());
                 }
                 return;
             }
@@ -178,79 +201,95 @@ impl MarkdownContextBuilderApp {
             // Clone values before setting status message to avoid borrow issues
             let directory = directory.clone();
             let root_node = root_node.clone();
+            let output_path = output_path.clone();
+            let output_format = self.selected_output_format;
 
-            self.is_generating_markdown = true;
+            self.is_generating_document = true;
             if show_completion_message {
-                self.set_status_message("Generating markdown...".to_string());
+                self.set_status_message("Generating document...".to_string());
             }
-            
+
             let sender = self.event_sender.clone();
-            
+
             thread::spawn(move || {
-                let generator = MarkdownGenerator::new(directory.clone(), selected_files);
-                let result = generator.generate_full_markdown(&root_node)
-                    .and_then(|content| {
-                        let output_path = directory.join(OUTPUT_FILENAME);
-                        generator.atomic_write_markdown(&output_path, &content)
-                    });
+                let generator = DocumentGenerator::new(directory.clone(), selected_files);
                 
-                if let Err(e) = sender.send(AppEvent::MarkdownGenerationComplete(result)) {
-                    error!("Failed to send markdown generation result: {}", e);
+                let result = generator.generate_full_document(&root_node, &output_path, output_format);
+
+                if let Err(e) = sender.send(AppEvent::DocumentGenerationComplete(result)) {
+                    error!("Failed to send document generation result: {}", e);
                 }
             });
+        } else if self.current_directory.is_none() {
+             if show_completion_message {
+                 self.set_error_message("Please select a directory first".to_string());
+             }
+        } else if self.root_file_node.is_none() {
+             if show_completion_message {
+                 self.set_error_message("Directory scanning not complete".to_string());
+             }
+        } else if self.output_file_path.is_none() {
+             if show_completion_message {
+                 self.set_error_message("Please choose an output file path".to_string());
+             }
         }
     }
 
-    fn handle_markdown_generation_complete(&mut self, result: Result<()>) {
-        self.is_generating_markdown = false;
-        
+    fn handle_document_generation_complete(&mut self, result: Result<()>) {
+        self.is_generating_document = false;
+
         match result {
             Ok(()) => {
-                if let Some(directory) = &self.current_directory {
-                    let output_path = directory.join(OUTPUT_FILENAME);
-                    self.set_status_message(format!("Markdown generated: {}", output_path.display()));
+                if let Some(output_path) = &self.output_file_path {
+                    self.set_status_message(format!("Document generated: {}", output_path.display()));
+                } else {
+                    self.set_status_message("Document generated successfully (path unknown)".to_string());
                 }
             }
             Err(e) => {
-                error!("Markdown generation failed: {}", e);
-                self.set_error_message(format!("Failed to generate markdown: {}", e));
+                error!("Document generation failed: {}", e);
+                self.set_error_message(format!("Failed to generate document: {}", e));
             }
         }
     }
 
     fn handle_file_modified(&mut self, file_path: PathBuf) {
         debug!("Handling file modification: {:?}", file_path);
-        
-        if let Some(directory) = &self.current_directory {
+
+        if let (Some(directory), Some(output_path)) = (&self.current_directory, &self.output_file_path) {
             let selected_files = self.ui_tree_handler.get_selected_files();
-            
-            // Only update if the modified file is in our selection
+
             if selected_files.contains(&file_path) {
                 let directory = directory.clone();
                 let sender = self.event_sender.clone();
-                
+                let markdown_path = output_path.clone();
+
+                let output_format = self.selected_output_format;
+
                 thread::spawn(move || {
-                    let generator = MarkdownGenerator::new(directory.clone(), selected_files);
-                    let markdown_path = directory.join(OUTPUT_FILENAME);
-                    let result = generator.update_file_section_in_markdown(&markdown_path, &file_path);
-                    
-                    if let Err(e) = sender.send(AppEvent::PartialMarkdownUpdateComplete(result)) {
-                        error!("Failed to send partial markdown update result: {}", e);
+                    let generator = DocumentGenerator::new(directory.clone(), selected_files);
+
+                    let result = generator.update_file_section_in_document(&markdown_path, &file_path, output_format);
+
+                    if let Err(e) = sender.send(AppEvent::PartialDocumentUpdateComplete(result)) {
+                        error!("Failed to send partial document update result: {}", e);
                     }
                 });
+            } else {
+                debug!("Modified file {:?} not in selected files. Skipping partial update.", file_path);
             }
+        } else {
+             debug!("Modified file {:?} received, but directory or output path not set. Skipping partial update.", file_path);
         }
     }
 
-    fn handle_partial_markdown_update_complete(&mut self, result: Result<()>) {
+    fn handle_partial_document_update_complete(&mut self, result: Result<()>) {
         match result {
             Ok(()) => {
-                debug!("Partial markdown update completed successfully");
-                // Don't show a message for partial updates to avoid spam
+                debug!("Partial document update completed successfully");
             }
             Err(e) => {
-                warn!("Partial markdown update failed: {}", e);
-                // Only show error if it's serious
+                warn!("Partial document update failed: {}", e);
             }
         }
     }
@@ -264,11 +303,11 @@ impl MarkdownContextBuilderApp {
                 AppEvent::FileModifiedDebounced(file_path) => {
                     self.handle_file_modified(file_path);
                 }
-                AppEvent::MarkdownGenerationComplete(result) => {
-                    self.handle_markdown_generation_complete(result);
+                AppEvent::DocumentGenerationComplete(result) => {
+                    self.handle_document_generation_complete(result);
                 }
-                AppEvent::PartialMarkdownUpdateComplete(result) => {
-                    self.handle_partial_markdown_update_complete(result);
+                AppEvent::PartialDocumentUpdateComplete(result) => {
+                    self.handle_partial_document_update_complete(result);
                 }
                 AppEvent::WatcherError(error) => {
                     error!("File watcher error: {}", error);
@@ -387,6 +426,121 @@ impl MarkdownContextBuilderApp {
         });
     }
 
+    fn render_output_settings(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(10.0);
+
+        ui.group(|ui| {
+            ui.vertical(|ui| {
+                ui.heading("Output Settings");
+                ui.add_space(5.0);
+
+                // Output Format Selection
+                ui.horizontal(|ui| {
+                    ui.label("Format:");
+                    let old_format = self.selected_output_format;
+                    ui.radio_value(&mut self.selected_output_format, OutputFormat::Markdown, OutputFormat::Markdown.name());
+                    ui.radio_value(&mut self.selected_output_format, OutputFormat::Adoc, OutputFormat::Adoc.name());
+                    
+                    // If the format changed and a path is set, update the path extension
+                    if old_format != self.selected_output_format {
+                        if let Some(path) = &mut self.output_file_path {
+                             let new_extension = self.selected_output_format.extension();
+                             // Only change the extension if the current path has one, or if it's the default base name
+                             if path.extension().is_some() || path.file_name().and_then(|name| name.to_str()).map_or(false, |name| name.starts_with(DEFAULT_OUTPUT_FILENAME_BASE)) {
+                                 path.set_extension(new_extension);
+                                 debug!("Updated output file extension to {} due to format change.", new_extension);
+                             } else {
+                                 debug!("Output path has no extension and is not default base name, not auto-updating extension.");
+                             }
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+
+                // Output File Path Selection
+                ui.horizontal(|ui| {
+                    ui.label("Save to:");
+                    ui.add_space(10.0);
+
+                    if let Some(path) = &self.output_file_path {
+                         ui.monospace(path.display().to_string());
+                    } else {
+                        ui.weak("Click 'Choose File' to select output path");
+                    }
+                });
+
+                ui.add_space(5.0);
+
+                ui.horizontal(|ui| {
+                     if ui.add_enabled(self.current_directory.is_some(), egui::Button::new("Choose File...")).clicked() {
+                        self.open_save_file_dialog();
+                     }
+                     // Optional: Add a button to reset output path to default suggestion
+                     if self.current_directory.is_some() && self.output_file_path.is_some() && self.output_file_path.as_ref().map(|p| p.file_name().unwrap_or_default().to_string_lossy().starts_with(DEFAULT_OUTPUT_FILENAME_BASE)).unwrap_or(false) {
+                          // This check prevents the 'Reset' button appearing unless a directory is set and the path *looks* like the default
+                     } else if self.current_directory.is_some() && (self.output_file_path.is_none() || !self.output_file_path.as_ref().unwrap().file_name().unwrap_or_default().to_string_lossy().starts_with(DEFAULT_OUTPUT_FILENAME_BASE)) {
+                         // Add 'Suggest Default' button if directory is set and current path is not the default suggestion
+                         if ui.button("Suggest Default").clicked() {
+                             if let Some(dir) = &self.current_directory {
+                                 self.output_file_path = Some(dir.join(format!("{}.{}", DEFAULT_OUTPUT_FILENAME_BASE, self.selected_output_format.extension())));
+                             }
+                         }
+                     }
+                });
+            });
+        });
+    }
+
+    fn open_save_file_dialog(&mut self) {
+        let mut dialog = rfd::FileDialog::new();
+
+        if let Some(dir) = &self.current_directory {
+            dialog = dialog.set_directory(dir);
+        }
+
+        // Add filters for both Markdown and AsciiDoc
+        dialog = dialog.add_filter(OutputFormat::Markdown.name(), &[OutputFormat::Markdown.extension()]);
+        dialog = dialog.add_filter(OutputFormat::Adoc.name(), &[OutputFormat::Adoc.extension()]);
+
+        if let Some(mut path) = dialog.save_file() { // Use mut path to allow modification
+            // Check if the path already has a file extension
+            if path.extension().is_none() {
+                // If not, append the extension of the currently selected format
+                if let Some(ext) = self.selected_output_format.extension().strip_prefix('.') { // Get extension without leading dot
+                    path.set_extension(ext);
+                } else {
+                    // Handle cases where extension() might return an empty string or no prefix
+                    path.set_extension(self.selected_output_format.extension());
+                }
+                 debug!("Appended extension to path: {:?}", path);
+            } else {
+                 debug!("Path already has an extension: {:?}", path);
+            }
+
+            self.output_file_path = Some(path.clone()); // Store the potentially modified path
+            
+            // Determine the format from the selected file's extension (keep existing logic)
+            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                self.selected_output_format = match ext.to_lowercase().as_str() {
+                    "md" => OutputFormat::Markdown,
+                    "adoc" => OutputFormat::Adoc,
+                    _ => {
+                        // If extension is unknown, keep the current selection and maybe warn
+                        warn!("Selected file has unknown extension: {}. Keeping current format selection.", ext);
+                        self.selected_output_format // Keep current
+                    }
+                };
+            } else {
+                 // This case should ideally not be reached if we appended an extension above,
+                 // but handle defensively if the selected path had no extension initially.
+                 warn!("Selected file has no extension after processing. Keeping current format selection.");
+                 // self.selected_output_format // Keep current
+            }
+
+            // Note: We don't trigger generation immediately, user clicks 'Generate'
+        }
+    }
+
     fn render_control_buttons(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         
@@ -395,11 +549,11 @@ impl MarkdownContextBuilderApp {
                 ui.horizontal(|ui| {
                     ui.heading("Actions");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Monitoring status with better visual indication
+                        // Monitoring status with better visual indication using EmojiLabel
                         if self.monitoring_active {
-                            ui.colored_label(egui::Color32::from_rgb(0, 150, 0), "🟢 Monitoring Active");
+                            EmojiLabel::new("🟢 Monitoring Active").show(ui);
                         } else {
-                            ui.colored_label(egui::Color32::from_rgb(150, 150, 150), "⚫ Monitoring Inactive");
+                            EmojiLabel::new("⚫ Monitoring Inactive").show(ui);
                         }
                     });
                 });
@@ -409,17 +563,19 @@ impl MarkdownContextBuilderApp {
                 ui.add_space(8.0);
                 
                 let has_selection = self.ui_tree_handler.has_selection();
-                let can_start = has_selection && !self.monitoring_active && !self.is_generating_markdown;
+                let output_path_set = self.output_file_path.is_some(); // Check if output path is set
+                let can_generate = has_selection && output_path_set && !self.is_generating_document; // Use renamed field
+                let can_start = has_selection && output_path_set && !self.monitoring_active && !self.is_generating_document; // Ensure output path is set before monitoring
                 let can_stop = self.monitoring_active;
                 
                 // Action buttons in a more organized layout
                 ui.horizontal(|ui| {
-                    // Generate markdown button (primary action)
-                    let generate_button = egui::Button::new("📝 Generate Markdown")
-                        .min_size(egui::vec2(140.0, 35.0));
-                    
-                    if ui.add_enabled(has_selection && !self.is_generating_markdown, generate_button).clicked() {
-                        self.generate_markdown(true);
+                    // Generate Document button (primary action) - Renamed
+                    let generate_button = egui::Button::new(RichText::new("📝 Generate Document"))
+                        .min_size(egui::vec2(180.0, 35.0));
+
+                    if ui.add_enabled(can_generate, generate_button).clicked() { // Use can_generate
+                        self.generate_document(true); // Call renamed method
                     }
                     
                     ui.add_space(10.0);
@@ -452,10 +608,15 @@ impl MarkdownContextBuilderApp {
                     ui.horizontal(|ui| {
                         ui.weak("💡 Select a directory first");
                     });
-                } else if self.is_generating_markdown {
+                } else if self.output_file_path.is_none() { // Added check for output path
+                     ui.horizontal(|ui| {
+                         ui.weak("💡 Choose an output file path");
+                     });
+                }
+                 else if self.is_generating_document { // Use renamed field
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("Generating markdown...");
+                        ui.label("Generating document...");
                     });
                 }
             });
@@ -513,17 +674,18 @@ impl MarkdownContextBuilderApp {
     }
 }
 
-impl eframe::App for MarkdownContextBuilderApp {
+impl eframe::App for ContextBuilderApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         // Process background events
         self.process_events();
         
         // Main UI with better layout
         egui::CentralPanel::default().show(ctx, |ui| {
-            // Title bar
+            // Title bar using RichText for emojis
             ui.vertical_centered(|ui| {
                 ui.add_space(10.0);
-                ui.heading("🦀 Context Builder - Rust Edition");
+                // Use RichText with heading style for the main title including emoji
+                ui.label(RichText::new("🦀 Context Builder - Rust Edition").heading());
                 ui.weak("Generate markdown documentation from your project files");
                 ui.add_space(10.0);
             });
@@ -537,6 +699,7 @@ impl eframe::App for MarkdownContextBuilderApp {
                 .show(ui, |ui| {
                     self.render_directory_selection(ui);
                     self.render_file_tree(ui);
+                    self.render_output_settings(ui); // Render new output settings section
                     self.render_control_buttons(ui);
                     self.render_status_messages(ui);
                     
@@ -545,8 +708,8 @@ impl eframe::App for MarkdownContextBuilderApp {
         });
         
         // Request repaint for animations (spinner, etc.)
-        if self.is_loading_directory || self.is_generating_markdown {
+        if self.is_loading_directory || self.is_generating_document {
             ctx.request_repaint();
         }
     }
-} 
+}
