@@ -13,6 +13,8 @@ pub enum AppEvent {
     DocumentGenerationComplete(Result<(), AppError>),
     /// Partial document update completed (renamed)
     PartialDocumentUpdateComplete(Result<(), AppError>),
+    /// Signals that the directory content has changed, requiring a full re-scan.
+    DirectoryContentChanged,
     /// File watcher encountered an error
     #[allow(dead_code)]
     WatcherError(AppError),

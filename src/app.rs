@@ -94,11 +94,20 @@ impl ContextBuilderApp {
         self.is_loading_directory = true;
         self.set_status_message("Scanning directory...".to_string());
         
-        // Stop any existing monitoring
+        // Stop any existing monitoring (for structural changes)
         if let Err(e) = self.file_monitor.stop_monitoring() {
             warn!("Error stopping file monitor: {}", e);
         }
-        self.monitoring_active = false;
+        
+        // Start monitoring for structural changes immediately
+        let dir_for_monitor = directory.clone();
+        if let Err(e) = self.file_monitor.start_monitoring(dir_for_monitor) {
+            error!("Failed to start directory monitoring: {}", e);
+            self.set_error_message(format!("Failed to start directory monitoring: {}", e));
+            // Proceed without monitoring if it fails, but inform the user
+        }
+
+        self.monitoring_active = false; // Document monitoring is off by default
         
         // Clear current state
         self.current_directory = Some(directory.clone());
@@ -143,48 +152,23 @@ impl ContextBuilderApp {
     }
 
     fn start_monitoring(&mut self) {
-        let selected_files = self.ui_tree_handler.get_selected_files();
-        
-        if selected_files.is_empty() {
-            self.set_error_message("Please select at least one file before starting monitoring".to_string());
-            return;
-        }
-
-        // Ensure output path is set before starting monitoring
-        if self.output_file_path.is_none() {
-             self.set_error_message("Please choose an output file path before starting monitoring".to_string());
-             return;
-        }
-
         if self.current_directory.is_some() {
             // First generate the initial document (pass false to suppress completion message here)
             self.generate_document(false);
 
-            // Then start file monitoring
-            match self.file_monitor.start_monitoring(selected_files.clone()) {
-                Ok(()) => {
-                    self.monitoring_active = true;
-                    self.set_status_message(format!("Monitoring {} files for changes", selected_files.len()));
-                }
-                Err(e) => {
-                    error!("Failed to start file monitoring: {}", e);
-                    self.set_error_message(format!("Failed to start monitoring: {}", e));
-                }
-            }
+            // Enable automatic document updates on file modifications
+            self.monitoring_active = true;
+            self.set_status_message("Monitoring selected files for changes and updating document".to_string());
+        } else {
+            self.set_error_message("Cannot start monitoring: Current directory not set.".to_string());
         }
     }
 
     fn stop_monitoring(&mut self) {
-        match self.file_monitor.stop_monitoring() {
-            Ok(()) => {
-                self.monitoring_active = false;
-                self.set_status_message("File monitoring stopped".to_string());
-            }
-            Err(e) => {
-                error!("Failed to stop file monitoring: {}", e);
-                self.set_error_message(format!("Failed to stop monitoring: {}", e));
-            }
-        }
+        // Only disable automatic document updates
+        self.monitoring_active = false;
+        self.set_status_message("Document updates stopped".to_string());
+        // The underlying file monitor for structural changes remains active
     }
 
     fn generate_document(&mut self, show_completion_message: bool) {
@@ -309,6 +293,12 @@ impl ContextBuilderApp {
                 AppEvent::PartialDocumentUpdateComplete(result) => {
                     self.handle_partial_document_update_complete(result);
                 }
+                AppEvent::DirectoryContentChanged => {
+                    info!("Directory content changed, re-scanning...");
+                    if let Some(dir) = self.current_directory.clone() {
+                        self.open_directory(dir);
+                    }
+                }
                 AppEvent::WatcherError(error) => {
                     error!("File watcher error: {}", error);
                     self.set_error_message(format!("File watcher error: {}", error));
@@ -406,10 +396,9 @@ impl ContextBuilderApp {
                             } else {
                                 let selection_changed = self.ui_tree_handler.render_tree(ui);
                                 
-                                // If monitoring is active and selection changed, restart monitoring
+                                // If automatic document updating is active and selection changed, regenerate document
                                 if selection_changed && self.monitoring_active {
-                                    self.stop_monitoring();
-                                    self.start_monitoring();
+                                    self.generate_document(false);
                                 }
                             }
                         });

@@ -9,7 +9,6 @@ mod app;
 
 use eframe::NativeOptions;
 use log::info;
-
 use app::ContextBuilderApp;
 
 fn main() -> Result<(), eframe::Error> {
