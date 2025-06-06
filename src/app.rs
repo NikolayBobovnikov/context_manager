@@ -16,6 +16,37 @@ use crate::file_monitor::FileMonitor;
 use crate::document_generator::DocumentGenerator;
 use crate::ui_tree_handler::UITreeHandler;
 
+// Initial default ignore patterns
+const DEFAULT_IGNORE_PATTERNS_ARRAY: &[&str] = &[
+    // Common VCS and build artifacts
+    ".git/", ".hg/", ".svn/",
+    "target/", "build/", "dist/", "pkg/", "node_modules/",
+    // Python specific
+    "__pycache__/", "*.pyc", "*.pyo", "*.pyd",
+    ".env", ".venv", "venv/", "env/",
+    // "requirements.txt", // Often useful to see, but can be configured if user wants it ignored
+    // Node specific
+    "package-lock.json", "yarn.lock",
+    // Common OS files
+    ".DS_Store", "Thumbs.db",
+    // Log files
+    "*.log",
+    // Temporary files
+    "*.tmp", "*.swp", "*.swo",
+    // Compiled outputs & binaries from various languages/tools
+    "*.o", "*.so", "*.a", "*.dylib",
+    "*.exe", "*.dll", "*.lib", "*.exp", "*.obj", "*.def",
+    // Archives & compressed files
+    "*.zip", "*.tar", "*.gz", "*.rar",
+    // Image/Media (usually not context for code)
+    "*.ico", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.tiff", "*.svg",
+    "*.mp3", "*.mp4", "*.avi",
+    // Database files
+    "*.db", "*.sqlite", "*.sqlite3",
+    // IDE specific
+    ".idea/", ".vscode/", "*.sublime-project", "*.sublime-workspace",
+];
+
 pub struct ContextBuilderApp {
     // Core state
     current_directory: Option<PathBuf>,
@@ -25,6 +56,7 @@ pub struct ContextBuilderApp {
     
     // UI state
     ui_tree_handler: UITreeHandler,
+    ignore_patterns_text: String, // New field for mutable ignore patterns
     
     // Communication
     event_sender: mpsc::Sender<AppEvent>,
@@ -57,6 +89,7 @@ impl ContextBuilderApp {
             selected_output_format: DEFAULT_OUTPUT_FORMAT,
             output_file_path: None,
             ui_tree_handler: UITreeHandler::new(),
+            ignore_patterns_text: DEFAULT_IGNORE_PATTERNS_ARRAY.join("\n"), // Initialize with default patterns
             event_sender,
             event_receiver,
             file_monitor,
@@ -85,11 +118,11 @@ impl ContextBuilderApp {
 
     fn open_directory_dialog(&mut self) {
         if let Some(path) = rfd::FileDialog::new().pick_folder() {
-            self.open_directory(path);
+            self.open_directory(path, self.ignore_patterns_text.lines().map(|s| s.to_string()).collect());
         }
     }
 
-    fn open_directory(&mut self, directory: PathBuf) {
+    fn open_directory(&mut self, directory: PathBuf, ignore_patterns: Vec<String>) {
         info!("Opening directory: {:?}", directory);
         self.is_loading_directory = true;
         self.set_status_message("Scanning directory...".to_string());
@@ -119,7 +152,7 @@ impl ContextBuilderApp {
         let sender = self.event_sender.clone();
         thread::spawn(move || {
             let result = FileHandler::new(directory)
-                .and_then(|handler| handler.scan_directory());
+                .and_then(|handler| handler.scan_directory(ignore_patterns));
             
             if let Err(e) = sender.send(AppEvent::DirectoryScanComplete(result)) {
                 error!("Failed to send directory scan result: {}", e);
@@ -296,7 +329,8 @@ impl ContextBuilderApp {
                 AppEvent::DirectoryContentChanged => {
                     info!("Directory content changed, re-scanning...");
                     if let Some(dir) = self.current_directory.clone() {
-                        self.open_directory(dir);
+                        // Re-scan with current ignore patterns
+                        self.open_directory(dir, self.ignore_patterns_text.lines().map(|s| s.to_string()).collect());
                     }
                 }
                 AppEvent::WatcherError(error) => {
@@ -342,7 +376,8 @@ impl ContextBuilderApp {
                         ui.add_space(10.0);
                         if ui.add_sized([100.0, 30.0], egui::Button::new("🔄 Refresh")).clicked() {
                             if let Some(dir) = self.current_directory.clone() {
-                                self.open_directory(dir);
+                                // Refresh with current ignore patterns
+                                self.open_directory(dir, self.ignore_patterns_text.lines().map(|s| s.to_string()).collect());
                             }
                         }
                     }
@@ -384,6 +419,7 @@ impl ContextBuilderApp {
                     });
                 } else if self.current_directory.is_some() {
                     egui::ScrollArea::vertical()
+                        .id_source("file_tree_scroll_area")
                         .max_height(350.0)
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
@@ -530,6 +566,39 @@ impl ContextBuilderApp {
         }
     }
 
+    fn render_ignore_settings(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(10.0);
+
+        egui::CollapsingHeader::new("Ignore Patterns")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.add_space(5.0);
+
+                ui.label("Enter patterns (one per line) to ignore files/directories (e.g., `.git/`, `target/`, `*.log`):");
+                ui.add_space(5.0);
+
+                egui::ScrollArea::vertical()
+                    .id_source("ignore_patterns_scroll_area")
+                    .max_height(150.0)
+                    .show(ui, |ui| {
+                        ui.add(egui::TextEdit::multiline(&mut self.ignore_patterns_text)
+                            .desired_width(ui.available_width())
+                            .frame(true)
+                            .hint_text("Enter ignore patterns here..."));
+                    });
+                
+                ui.add_space(8.0);
+                
+                if ui.button("Apply Patterns & Rescan").clicked() {
+                    if let Some(dir) = self.current_directory.clone() {
+                        self.open_directory(dir, self.ignore_patterns_text.lines().map(|s| s.to_string()).collect());
+                    } else {
+                        self.set_error_message("Please select a directory first to apply ignore patterns.".to_string());
+                    }
+                }
+            });
+    }
+
     fn render_control_buttons(&mut self, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         
@@ -553,8 +622,8 @@ impl ContextBuilderApp {
                 
                 let has_selection = self.ui_tree_handler.has_selection();
                 let output_path_set = self.output_file_path.is_some(); // Check if output path is set
-                let can_generate = has_selection && output_path_set && !self.is_generating_document; // Use renamed field
-                let can_start = has_selection && output_path_set && !self.monitoring_active && !self.is_generating_document; // Ensure output path is set before monitoring
+                let can_generate = has_selection && output_path_set && !self.is_generating_document && !self.is_loading_directory; // Use renamed field
+                let can_start = has_selection && output_path_set && !self.monitoring_active && !self.is_generating_document && !self.is_loading_directory; // Ensure output path is set before monitoring
                 let can_stop = self.monitoring_active;
                 
                 // Action buttons in a more organized layout
@@ -688,7 +757,8 @@ impl eframe::App for ContextBuilderApp {
                 .show(ui, |ui| {
                     self.render_directory_selection(ui);
                     self.render_file_tree(ui);
-                    self.render_output_settings(ui); // Render new output settings section
+                    self.render_ignore_settings(ui);
+                    self.render_output_settings(ui); 
                     self.render_control_buttons(ui);
                     self.render_status_messages(ui);
                     

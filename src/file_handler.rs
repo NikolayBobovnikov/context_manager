@@ -4,7 +4,6 @@ use std::fs;
 use ignore::{WalkBuilder, DirEntry};
 use log::{debug, warn};
 
-use crate::constants::ADDITIONAL_IGNORE_PATTERNS;
 use crate::error::{AppError, Result};
 
 #[derive(Debug, Clone)]
@@ -75,7 +74,7 @@ impl FileHandler {
         Ok(FileHandler { directory })
     }
 
-    pub fn scan_directory(&self) -> Result<FileNode> {
+    pub fn scan_directory(&self, ignore_patterns: Vec<String>) -> Result<FileNode> {
         debug!("Starting directory scan for: {:?}", self.directory);
         
         let mut builder = WalkBuilder::new(&self.directory);
@@ -91,7 +90,7 @@ impl FileHandler {
 
         // Add additional ignore patterns
         let mut overrides_builder = ignore::overrides::OverrideBuilder::new(&self.directory);
-        for pattern_to_ignore in ADDITIONAL_IGNORE_PATTERNS {
+        for pattern_to_ignore in ignore_patterns {
             let blacklist_pattern = format!("!{}", pattern_to_ignore);
             if let Err(e) = overrides_builder.add(&blacklist_pattern) {
                 warn!("Failed to add ignore pattern '{}' as blacklist override '{}': {}", pattern_to_ignore, blacklist_pattern, e);

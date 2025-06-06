@@ -13,7 +13,7 @@ This Rust version is a rewrite of an original Python project, aiming for improve
 *   **Directory Selection**: Easily browse and select a project directory using native file dialogs.
 *   **Hierarchical File Tree Display**: View the directory structure in an expandable tree view.
 *   **File Selection**: Interactively select or deselect files and directories for inclusion in the markdown output.
-*   **Configurable Ignore Patterns**: Utilizes `.gitignore` rules by default and allows for additional custom ignore patterns to filter out irrelevant files/directories (e.g., build artifacts, logs).
+*   **Configurable Ignore Patterns**: Utilizes `.gitignore` rules by default and allows for additional custom ignore patterns to be entered and applied directly within the GUI, dynamically updating the file tree.
 *   **Markdown Generation**: Produces a single markdown file containing:
     *   A visualization of the selected project structure.
     *   The full content of all selected files, each in its own code block.
@@ -49,7 +49,7 @@ This diagram illustrates the main components and their interactions:
 ```mermaid
 graph LR
     subgraph "User Interface (egui/eframe)"
-        A[main.rs] --> B(app.rs - MarkdownContextBuilderApp)
+        A[main.rs] --> B(app.rs - ContextBuilderApp)
         B --> C(ui_tree_handler.rs - UITreeHandler)
     end
 
@@ -81,15 +81,15 @@ graph LR
     H ---|"Processed by"| B
 ```
 
-*   **`main.rs`**: The application's entry point. It initializes the logging framework (`env_logger`) and sets up `eframe` to run the `MarkdownContextBuilderApp`.
-*   **`app.rs` (`MarkdownContextBuilderApp`)**: This is the core of the application, implementing the `eframe::App` trait. It manages the overall application state (current directory, root `FileNode`, UI messages, loading states), handles all user interactions from the `egui` interface, orchestrates background tasks like directory scanning and markdown generation by spawning threads, and processes `AppEvent`s received from these background tasks.
+*   **`main.rs`**: The application's entry point. It initializes the logging framework (`env_logger`) and sets up `eframe` to run the `ContextBuilderApp`.
+*   **`app.rs` (`ContextBuilderApp`)**: This is the core of the application, implementing the `eframe::App` trait. It manages the overall application state (current directory, root `FileNode`, UI messages, loading states, configurable ignore patterns), handles all user interactions from the `egui` interface, orchestrates background tasks like directory scanning and markdown generation by spawning threads, and processes `AppEvent`s received from these background tasks.
 *   **`ui_tree_handler.rs` (`UITreeHandler`)**: Manages the state and rendering of the hierarchical file tree in the UI. It translates the `FileNode` structure (from `file_handler.rs`) into a set of `UITreeNode`s that `egui` can render. It handles user selections in the tree, including propagation of selection state to parent/child nodes.
-*   **`file_handler.rs` (`FileHandler`)**: Responsible for scanning a given directory. It uses the `ignore` crate to traverse the file system, respecting `.gitignore` files and other ignore patterns defined in `constants.rs`. It builds a `FileNode` tree, which is a recursive structure representing files and directories.
+*   **`file_handler.rs` (`FileHandler`)**: Responsible for scanning a given directory. It uses the `ignore` crate to traverse the file system, respecting `.gitignore` files and dynamically provided custom ignore patterns. It builds a `FileNode` tree, which is a recursive structure representing files and directories.
 *   **`markdown_generator.rs` (`MarkdownGenerator`)**: Contains the logic to generate the final markdown string. It takes the root `FileNode` and the list of selected file paths to construct the project structure section and append the content of each selected file. It utilizes `tempfile` for atomic writes to the output file, preventing data corruption.
 *   **`file_monitor.rs` (`FileMonitor`)**: Implements file system watching using the `notify` crate. When monitoring is active, it watches the entire selected project directory recursively for creation, modification, and deletion events. It includes a debouncing mechanism to prevent overly frequent updates from rapid file changes, sending appropriate `AppEvent`s (`FileModifiedDebounced` or `DirectoryContentChanged`) to `app.rs`.
 *   **`events.rs` (`AppEvent`)**: Defines an enum for messages passed between the main UI thread (`app.rs`) and the background worker threads. This allows for non-blocking operations and keeps the UI responsive. Examples include `DirectoryScanComplete`, `MarkdownGenerationComplete`, `FileModifiedDebounced`, and `DirectoryContentChanged`.
 *   **`error.rs` (`AppError`)**: Defines the application's custom error types using the `thiserror` crate. This provides a structured way to handle and report errors from different modules.
-*   **`constants.rs`**: A central place for application-wide constants, such_as the default output filename (`project_structure.md`), markdown formatting strings, ignore patterns, and UI-related durations.
+*   **`constants.rs`**: A central place for application-wide constants, such_as the default output filename (`project_structure.md`), markdown formatting strings, and UI-related durations.
 
 ## 4. Workflow / Event Flow
 
