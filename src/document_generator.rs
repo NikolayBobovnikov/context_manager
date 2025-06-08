@@ -162,11 +162,11 @@ impl DocumentGenerator {
         &self,
         node: &FileNode,
         base_dir_path: &Path,
-        current_relative_path: &Path,
+        _current_relative_path: &Path,
         depth: usize,
         is_last_child_stack: &mut Vec<bool>,
         output: &mut String,
-        format: OutputFormat
+        _format: OutputFormat
     ) -> Result<()> {
         if depth == 0 {
             // Root directory
@@ -174,19 +174,17 @@ impl DocumentGenerator {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "root".to_string());
 
-            match format {
-                OutputFormat::Markdown => output.push_str(&format!("{}\n", root_name)),
-                OutputFormat::Adoc => output.push_str(&format!("{}\n", root_name)),
-            }
+            output.push_str(&format!("{}\n", root_name));
         } else {
             let prefix = self.get_branch_prefix(depth, is_last_child_stack);
+            let is_last = is_last_child_stack.last().copied().unwrap_or(false);
+            let connector = if is_last { "└── " } else { "├── " };
+            
+            output.push_str(&format!("{}{}{}", prefix, connector, node.name));
             if node.is_dir {
-                output.push_str(&format!("{}├── {}/\n", prefix, node.name));
-            } else {
-                // For files, adjust the prefix based on the parent's indentation
-                let file_prefix = self.get_branch_prefix(depth - 1, is_last_child_stack);
-                output.push_str(&format!("{}├── {}\n", file_prefix, node.name));
+                output.push('/');
             }
+            output.push('\n');
         }
 
         if node.is_dir {
@@ -201,7 +199,7 @@ impl DocumentGenerator {
             let num_children_to_render = children_to_render.len();
             for (i, child) in children_to_render.iter().enumerate() {
                 is_last_child_stack.push(i == num_children_to_render - 1);
-                let child_relative_path = current_relative_path.join(&child.name);
+                let child_relative_path = _current_relative_path.join(&child.name);
                 self.build_structure_string_recursive(
                     child,
                     base_dir_path,
@@ -209,7 +207,7 @@ impl DocumentGenerator {
                     depth + 1,
                     is_last_child_stack,
                     output,
-                    format
+                    _format
                 )?;
                 is_last_child_stack.pop();
             }
@@ -221,24 +219,16 @@ impl DocumentGenerator {
     fn get_branch_prefix(&self, depth: usize, is_last_child_stack: &[bool]) -> String {
         let mut prefix = String::new();
         if depth > 1 {
-            for i in 1..depth.saturating_sub(1) {
+            // We look at the ancestors, which are at depths 1 to depth-1.
+            // The is_last_child_stack has `depth-1` relevant items for a node at `depth`.
+            // The loop goes from 0 to depth-2.
+            for i in 0..depth.saturating_sub(1) {
                 prefix.push_str(if is_last_child_stack.get(i).copied().unwrap_or(false) { 
-                    "    " 
+                    "    " // Ancestor was the last child, so no vertical line.
                 } else { 
-                    "│   " 
+                    "│   " // Ancestor was not the last child, so add a vertical line.
                 });
             }
-            
-            if depth > 1 {
-                if is_last_child_stack.get(depth - 1).copied().unwrap_or(false) {
-                    prefix.push_str("└── ");
-                } else {
-                    prefix.push_str("├── ");
-                }
-            }
-        } else if depth == 1 {
-            // Direct children of root
-            prefix.push_str("│   ");
         }
         prefix
     }
